@@ -6,6 +6,7 @@
 using Newtonsoft.Json;
 using SendGrid.Helpers.Mail.Model;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -20,6 +21,25 @@ namespace SendGrid.Helpers.Mail
     [JsonObject(IsReference = false)]
     public class SendGridMessage
     {
+        private readonly ArrayPool<byte> bufferPool;
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="SendGridMessage"/> class.
+        /// </summary>
+        public SendGridMessage()
+            : this(ArrayPool<byte>.Shared)
+        {
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="SendGridMessage"/> class with the specified buffer pool.
+        /// </summary>
+        /// <param name="bufferPool">The <see cref="ArrayPool{T}"/> to be used for acquiring buffers.</param>
+        public SendGridMessage(ArrayPool<byte> bufferPool)
+        {
+            this.bufferPool = bufferPool ?? throw new ArgumentNullException(nameof(bufferPool));
+        }
+
         /// <summary>
         /// Gets or sets an email object containing the email address and name of the sender. Unicode encoding is not supported for the from field.
         /// </summary>
@@ -1063,13 +1083,19 @@ namespace SendGrid.Helpers.Mail
             }
 
             var contentLength = Convert.ToInt32(contentStream.Length);
-            var streamBytes = new byte[contentLength];
+            var streamBytes = this.bufferPool.Rent(contentLength);
+            try
+            {
+                await contentStream.ReadAsync(streamBytes, 0, contentLength, cancellationToken);
 
-            await contentStream.ReadAsync(streamBytes, 0, contentLength, cancellationToken);
+                var base64Content = Convert.ToBase64String(streamBytes);
 
-            var base64Content = Convert.ToBase64String(streamBytes);
-
-            this.AddAttachment(filename, base64Content, type, disposition, content_id);
+                this.AddAttachment(filename, base64Content, type, disposition, content_id);
+            }
+            finally
+            {
+                this.bufferPool.Return(streamBytes);
+            }
         }
 
         /// <summary>

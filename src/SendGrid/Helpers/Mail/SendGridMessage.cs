@@ -10,6 +10,7 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -1074,7 +1075,7 @@ namespace SendGrid.Helpers.Mail
         /// <param name="content_id">A unique id that you specify for the attachment. This is used when the disposition is set to "inline" and the attachment is an image, allowing the file to be displayed within the body of your email. Ex: <![CDATA[ <img src="cid:ii_139db99fdb5c3704"></img> ]]></param>
         /// <param name="cancellationToken">A cancellation token which can notify if the task should be canceled.</param>
         /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
-        public async Task AddAttachmentAsync(string filename, Stream contentStream, string type = null, string disposition = null, string content_id = null, CancellationToken cancellationToken = default(CancellationToken))
+        public async Task AddAttachmentAsync(string filename, Stream contentStream, string type = null, string disposition = null, string content_id = null, CancellationToken cancellationToken = default)
         {
             // Stream doesn't want us to read it, can't do anything else here
             if (contentStream == null || !contentStream.CanRead)
@@ -1082,6 +1083,54 @@ namespace SendGrid.Helpers.Mail
                 return;
             }
 
+            // If the stream is seekable, just grab the length and read it.
+            if (contentStream.CanSeek)
+            {
+                await this.AddAttachmentFromSeekableStreamAsync(filename, contentStream, type, disposition, content_id, cancellationToken);
+                return;
+            }
+
+            // Otherwise, we'll have to read the stream until there is nothing more to be read.
+            // Every chunk we read will be converted to base64, and appended to the StringBuilder.
+            var buffer = this.bufferPool.Rent(4 * 1024); // at least 4 KiB, often this will be larger.
+            var offset = 0;
+            var sb = new StringBuilder();
+
+            try
+            {
+                while (true)
+                {
+                    try
+                    {
+                        var numRead = await contentStream.ReadAsync(buffer, offset, buffer.Length, cancellationToken);
+
+                        if (numRead == 0)
+                        {
+                            break;
+                        }
+
+                        var content = Convert.ToBase64String(buffer, 0, numRead);
+
+                        sb.Append(content);
+
+                        offset += numRead;
+                    }
+                    catch (EndOfStreamException)
+                    {
+                        break;
+                    }
+                }
+            }
+            finally
+            {
+                this.bufferPool.Return(buffer);
+            }
+
+            this.AddAttachment(filename, sb.ToString(), type, disposition, content_id);
+        }
+
+        private async Task AddAttachmentFromSeekableStreamAsync(string fileName, Stream contentStream, string type = null, string disposition = null, string content_id = null, CancellationToken cancellationToken = default)
+        {
             var contentLength = Convert.ToInt32(contentStream.Length);
             var streamBytes = this.bufferPool.Rent(contentLength);
             try
@@ -1090,14 +1139,14 @@ namespace SendGrid.Helpers.Mail
 
                 var base64Content = Convert.ToBase64String(streamBytes);
 
-                this.AddAttachment(filename, base64Content, type, disposition, content_id);
+                this.AddAttachment(fileName, base64Content, type, disposition, content_id);
             }
             finally
             {
                 this.bufferPool.Return(streamBytes);
             }
         }
-
+        
         /// <summary>
         /// Add an attachment to the email.
         /// </summary>

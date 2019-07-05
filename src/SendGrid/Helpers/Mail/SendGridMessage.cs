@@ -1098,7 +1098,7 @@ namespace SendGrid.Helpers.Mail
 
             try
             {
-                while (true)
+                while (!cancellationToken.IsCancellationRequested)
                 {
                     try
                     {

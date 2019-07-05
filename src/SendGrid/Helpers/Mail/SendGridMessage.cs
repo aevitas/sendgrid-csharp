@@ -1109,9 +1109,9 @@ namespace SendGrid.Helpers.Mail
                             break;
                         }
 
-                        var content = Convert.ToBase64String(buffer, 0, numRead);
+                        var chunk = Convert.ToBase64String(buffer, 0, numRead);
 
-                        sb.Append(content);
+                        sb.Append(chunk);
 
                         offset += numRead;
                     }
